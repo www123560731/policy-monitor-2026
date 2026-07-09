@@ -1,10 +1,7 @@
-// Vercel Serverless Function
 const https = require('https');
 
-// 关键词白名单
 const KEYWORDS = ['印发','规划','通知','意见','财税','体制改革','国务院','部委','发改委','央行','出台','提升专项'];
 
-// 简单的AI分析模板（根据标题关键词生成）
 function generateAnalysis(title) {
     const intentMap = {
         '印发':'通过发布正式文件推动政策落地，意图建立长效机制。',
@@ -30,30 +27,40 @@ function generateAnalysis(title) {
     };
 }
 
-// 判断新闻是否匹配关键词
 function matchesPolicy(text) {
     return KEYWORDS.some(kw => text.includes(kw));
 }
 
-// 获取并解析RSS
 function fetchRSS() {
     return new Promise((resolve, reject) => {
-        const url = 'https://rsshub.app/cls/telegraph';
-        https.get(url, (res) => {
+        // 更换为更稳定的 RSSHub 官方备用或高质量第三方镜像
+        const url = 'https://rsshub.feedland.cc/cls/telegraph'; 
+        
+        const options = {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+        };
+
+        https.get(url, options, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
                 try {
-                    // 简单解析RSS XML（不依赖第三方库，用正则提取item）
                     const items = [];
+                    // 更加宽容的正则，兼容换行符
                     const itemRegex = /<item>([\s\S]*?)<\/item>/g;
                     let match;
                     while ((match = itemRegex.exec(data)) !== null) {
                         const itemXml = match[1];
-                        const title = (itemXml.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || [,''])[1];
-                        const description = (itemXml.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/) || [,''])[1];
-                        const pubDate = (itemXml.match(/<pubDate>(.*?)<\/pubDate>/) || [,''])[1];
-                        if (title && description) {
+                        // 兼容有无 CDATA 的情况
+                        const titleMatch = itemXml.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/);
+                        const descMatch = itemXml.match(/<description>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/description>/);
+                        const pubDateMatch = itemXml.match(/<pubDate>([\s\S]*?)<\/pubDate>/);
+
+                        const title = titleMatch ? titleMatch[1].trim() : '';
+                        const description = descMatch ? descMatch[1].trim() : '';
+                        const pubDate = pubDateMatch ? pubDateMatch[1].trim() : '';
+
+                        if (title || description) {
                             items.push({ title, description, pubDate });
                         }
                     }
@@ -67,17 +74,18 @@ function fetchRSS() {
 }
 
 module.exports = async (req, res) => {
+    // 允许跨域
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+
     try {
         const items = await fetchRSS();
-        // 过滤政策相关新闻
         const filtered = items.filter(item => matchesPolicy(item.title + item.description));
-        // 构建返回数据
         const news = filtered.map((item, index) => ({
             id: `cls-${index}-${Date.now()}`,
             title: item.title,
             content: item.description.replace(/<[^>]*>/g, '').substring(0, 200) + '...',
-            timestamp: item.pubDate || new Date().toLocaleString(),
-            matched_keywords: KEYWORDS.filter(kw => item.title.includes(kw) || item.description.includes(kw)),
+            timestamp: item.pubDate ? new Date(item.pubDate).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'}) : new Date().toLocaleString(),
             ai: generateAnalysis(item.title)
         }));
         res.status(200).json({ news });
