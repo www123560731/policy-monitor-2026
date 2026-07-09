@@ -1,87 +1,88 @@
-// Vercel Serverless Function
+// Vercel Serverless Function - 稳定版（带兜底数据）
 const https = require('https');
 
-// 关键词白名单
 const KEYWORDS = ['印发','规划','通知','意见','财税','体制改革','国务院','部委','发改委','央行','出台','提升专项'];
 
-// 简单的AI分析模板（根据标题关键词生成）
-function generateAnalysis(title) {
-    const intentMap = {
-        '印发':'通过发布正式文件推动政策落地，意图建立长效机制。',
-        '通知':'通过行政命令快速部署工作任务，确保下级执行。',
-        '意见':'为特定领域改革提供指导性方向，释放改革信号。',
-        '财税':'调整央地财政关系或税收工具，意在优化经济结构。',
-        '体制改革':'从制度层面打破现有瓶颈，激发市场活力。',
-        '国务院':'最高行政机关直接部署，凸显政策优先级。',
-        '发改委':'聚焦宏观经济与产业规划，调控资源配置。',
-        '央行':'运用货币政策工具调节流动性，稳定金融市场。',
-        '出台':'新政策正式亮相，填补监管或支持空白。',
-        '规划':'制定中长期发展蓝图，引导社会预期。',
-        '提升专项':'针对特定领域加大投入，力求突破短板。'
-    };
-    let intent = '围绕关键词出台相关政策，旨在解决对应领域突出问题。';
-    for (let [kw, desc] of Object.entries(intentMap)) {
-        if (title.includes(kw)) { intent = desc; break; }
+// 内置示例数据，防止抓取失败时空页面
+const FALLBACK_NEWS = [
+    {
+        id: 'fb-1',
+        title: '【示例】工信部印发工业大模型应用通知',
+        content: '四部门印发通知，到2027年培育100个以上工业大模型标杆应用...',
+        timestamp: new Date().toLocaleString(),
+        matched_keywords: ['印发','通知'],
+        ai: {
+            intent: '推动制造业数智化转型，降低边际成本。',
+            problem: '中小企业资金不足，升级意愿低。',
+            effect: '财政贴息能激活部分需求，但无法解决下游订单不足。'
+        }
     }
+];
+
+function generateAnalysis(title) {
+    let intent = '围绕政策关键词出台相关措施，旨在解决行业突出问题。';
+    if (title.includes('印发')) intent = '通过发布正式文件推动政策落地，建立长效机制。';
+    else if (title.includes('通知')) intent = '以行政命令快速部署工作任务，确保执行力。';
+    else if (title.includes('意见')) intent = '为改革提供指导方向，释放政策信号。';
+    else if (title.includes('财税')) intent = '调整央地财政关系或税收工具，优化经济结构。';
+    else if (title.includes('国务院')) intent = '最高行政机关直接部署，凸显政策优先级。';
+    else if (title.includes('央行')) intent = '运用货币政策工具调节流动性，稳定市场预期。';
     return {
-        intent: intent,
-        problem: '当前该领域存在制度不完善、执行不到位或市场失灵等问题，需要政策干预。',
-        effect: '政策短期有望提振信心、引导资源倾斜，长期效果取决于执行力度和配套措施。'
+        intent,
+        problem: '当前该领域存在制度壁垒或市场失灵，亟需政策干预。',
+        effect: '短期有望提振信心、引导资源，长期取决于执行力度。'
     };
 }
 
-// 判断新闻是否匹配关键词
 function matchesPolicy(text) {
     return KEYWORDS.some(kw => text.includes(kw));
 }
 
-// 获取并解析RSS
-function fetchRSS() {
+function fetchWithTimeout(url, timeout = 8000) {
     return new Promise((resolve, reject) => {
-        const url = 'https://rsshub.app/cls/telegraph';
-        https.get(url, (res) => {
+        const req = https.get(url, { timeout }, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-                try {
-                    // 简单解析RSS XML（不依赖第三方库，用正则提取item）
-                    const items = [];
-                    const itemRegex = /<item>([\s\S]*?)<\/item>/g;
-                    let match;
-                    while ((match = itemRegex.exec(data)) !== null) {
-                        const itemXml = match[1];
-                        const title = (itemXml.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || [,''])[1];
-                        const description = (itemXml.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/) || [,''])[1];
-                        const pubDate = (itemXml.match(/<pubDate>(.*?)<\/pubDate>/) || [,''])[1];
-                        if (title && description) {
-                            items.push({ title, description, pubDate });
-                        }
-                    }
-                    resolve(items);
-                } catch (e) {
-                    reject(e);
-                }
-            });
-        }).on('error', reject);
+            res.on('end', () => resolve(data));
+        });
+        req.on('error', reject);
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('请求超时'));
+        });
     });
 }
 
-module.exports = async (req, res) => {
+async function getNews() {
     try {
-        const items = await fetchRSS();
-        // 过滤政策相关新闻
+        const xml = await fetchWithTimeout('https://rsshub.app/cls/telegraph');
+        const items = [];
+        const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+        let match;
+        while ((match = itemRegex.exec(xml)) !== null) {
+            const block = match[1];
+            const title = (block.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) || [,''])[1];
+            const desc = (block.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/) || [,''])[1];
+            const pubDate = (block.match(/<pubDate>(.*?)<\/pubDate>/) || [,''])[1];
+            if (title && desc) items.push({ title, description: desc.replace(/<[^>]*>/g,''), pubDate });
+        }
         const filtered = items.filter(item => matchesPolicy(item.title + item.description));
-        // 构建返回数据
-        const news = filtered.map((item, index) => ({
-            id: `cls-${index}-${Date.now()}`,
+        if (filtered.length === 0) throw new Error('无匹配政策快讯');
+        return filtered.map((item, i) => ({
+            id: `cls-${i}`,
             title: item.title,
-            content: item.description.replace(/<[^>]*>/g, '').substring(0, 200) + '...',
+            content: item.description.substring(0, 200) + '...',
             timestamp: item.pubDate || new Date().toLocaleString(),
-            matched_keywords: KEYWORDS.filter(kw => item.title.includes(kw) || item.description.includes(kw)),
+            matched_keywords: KEYWORDS.filter(kw => item.title.includes(kw)),
             ai: generateAnalysis(item.title)
         }));
-        res.status(200).json({ news });
-    } catch (err) {
-        res.status(500).json({ error: '获取数据失败', message: err.message });
+    } catch (e) {
+        console.error('抓取失败，使用兜底数据:', e.message);
+        return FALLBACK_NEWS;
     }
+}
+
+module.exports = async (req, res) => {
+    const news = await getNews();
+    res.status(200).json({ news });
 };
