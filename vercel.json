@@ -1,6 +1,7 @@
 {
   "version": 2,
-  "rewrites": [
-    { "source": "/api/news", "destination": "/api/news.js" }
+  "routes": [
+    { "src": "/api/news", "dest": "/api/news.js" },
+    { "src": "/(.*)", "dest": "/$1" }
   ]
 }
